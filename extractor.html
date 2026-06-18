@@ -1621,8 +1621,83 @@ body.lightMode #editorWrapper.compacto::after{
 
 <script>
 
-const GROQ_API_KEY =
-"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";
+let GROQ_API_KEY = "";
+
+function solicitarGroqApiKey(forzar = false){
+  const keyGuardada = (localStorage.getItem("GROQ_API_KEY") || "").trim();
+
+  if(!forzar && keyGuardada && keyGuardada.startsWith("gsk_")){
+    GROQ_API_KEY = keyGuardada;
+    return GROQ_API_KEY;
+  }
+
+  const nuevaKey = window.prompt("Pega tu API Key de Groq para habilitar el extractor:", keyGuardada || "");
+
+  if(nuevaKey === null){
+    if(forzar){
+      throw new Error("No se ingresó ninguna API Key de Groq.");
+    }
+    return "";
+  }
+
+  const keyLimpia = nuevaKey.trim();
+
+  if(!keyLimpia){
+    if(forzar){
+      throw new Error("La API Key de Groq está vacía.");
+    }
+    return "";
+  }
+
+  if(!keyLimpia.startsWith("gsk_")){
+    alert("La API Key no parece válida. Debe iniciar con gsk_");
+    throw new Error("Formato de API Key inválido.");
+  }
+
+  localStorage.setItem("GROQ_API_KEY", keyLimpia);
+  GROQ_API_KEY = keyLimpia;
+  return GROQ_API_KEY;
+}
+
+function obtenerGroqApiKey(){
+  if(GROQ_API_KEY && GROQ_API_KEY.startsWith("gsk_")){
+    return GROQ_API_KEY;
+  }
+
+  const keyGuardada = (localStorage.getItem("GROQ_API_KEY") || "").trim();
+
+  if(keyGuardada && keyGuardada.startsWith("gsk_")){
+    GROQ_API_KEY = keyGuardada;
+    return GROQ_API_KEY;
+  }
+
+  return solicitarGroqApiKey(false);
+}
+
+function borrarGroqApiKey(){
+  localStorage.removeItem("GROQ_API_KEY");
+  GROQ_API_KEY = "";
+}
+
+function manejarErrorGroq(response, data){
+  if(response && response.status === 401){
+    borrarGroqApiKey();
+    alert("La API Key de Groq es inválida, expiró o fue revocada. Ingresa una nueva.");
+  }
+
+  const mensaje = data?.error?.message || (response ? `Error HTTP ${response.status}` : "Error desconocido consultando Groq");
+  throw new Error(mensaje);
+}
+
+window.addEventListener("load", ()=>{
+  setTimeout(()=>{
+    try{
+      solicitarGroqApiKey(false);
+    }catch(e){
+      console.warn("No se pudo preparar la API Key de Groq:", e);
+    }
+  }, 120);
+});
 
 const editor =
 document.getElementById("editor");
@@ -2085,13 +2160,19 @@ EXTRAER DATOS IA
 
 async function analizarConIA(texto){
 
+const apiKey = obtenerGroqApiKey();
+
+if(!apiKey){
+  throw new Error("Falta la API Key de Groq.");
+}
+
 const response = await fetch(
 "https://api.groq.com/openai/v1/chat/completions",
 {
 method:"POST",
 
 headers:{
-"Authorization":"Bearer " + GROQ_API_KEY,
+"Authorization":"Bearer " + apiKey,
 "Content-Type":"application/json"
 },
 
@@ -2185,11 +2266,17 @@ max_tokens:1000
 
 });
 
-const data =
-await response.json();
+const data = await response.json();
 
-const content =
-data.choices[0].message.content;
+if(!response.ok){
+  manejarErrorGroq(response, data);
+}
+
+const content = data?.choices?.[0]?.message?.content;
+
+if(!content){
+  throw new Error("Groq no devolvió contenido válido.");
+}
 
 const limpio =
 content
@@ -2580,10 +2667,15 @@ try{
 }
 
 try{
+  const apiKey = obtenerGroqApiKey();
+  if(!apiKey){
+    throw new Error("Falta la API Key de Groq.");
+  }
+
   const response = await fetch("https://api.groq.com/openai/v1/chat/completions",{
     method:"POST",
     headers:{
-      "Authorization":"Bearer " + GROQ_API_KEY,
+      "Authorization":"Bearer " + apiKey,
       "Content-Type":"application/json"
     },
     body:JSON.stringify({
@@ -2596,8 +2688,18 @@ try{
       max_tokens:220
     })
   });
+
   const json = await response.json();
-  const content = json.choices?.[0]?.message?.content || "";
+
+  if(!response.ok){
+    manejarErrorGroq(response, json);
+  }
+
+  const content = json?.choices?.[0]?.message?.content || "";
+  if(!content){
+    throw new Error("Groq no devolvió contenido para clasificar la zona.");
+  }
+
   const limpio = content.replace(/```json/g,"").replace(/```/g,"").trim();
   const parsed = JSON.parse(limpio);
   if(parsed && parsed.zona){
